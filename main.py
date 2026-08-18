@@ -1,14 +1,15 @@
+import os
 import time
 import requests
 from bs4 import BeautifulSoup
 
 # ==========================================
-# CONFIGURACIÓN DE CREDENCIALES
+# LECTURA DE VARIABLES DE ENTORNO EN RAILWAY
 # ==========================================
-TELEGRAM_TOKEN = "8869156451:AAFQibGkEs54JVhHpgCg_j0QDuLMmGFj-p8"
-TELEGRAM_CHAT_ID = "8295036704"
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-# ID de la prestación específica
+# ID de la prestación específica (3149)
 ID_PRESTACION = "3149"
 URL_TRAMITE = f"https://formulario-sigeci.buenosaires.gob.ar/AgendarTramite?idPrestacion={ID_PRESTACION}"
 
