@@ -1,11 +1,11 @@
 import os
 import time
 import requests
+from datetime import datetime
 
 # ==========================================
 # CONFIGURACIÓN Y CREDENCIALES
 # ==========================================
-# Se leen desde las Variables de Railway (o puedes poner los valores directamente entre comillas)
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8869156451:AAFQibGkEs54JVhHpgCg_j0QDuLMmGFj-p8")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "8295036704")
 
@@ -13,7 +13,6 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "8295036704")
 SEDE_ID = "2279"
 SERVICIO_ID = "3149"
 
-# Enlace directo de reserva para el usuario
 URL_RESERVA = f"https://formulario-sigeci.buenosaires.gob.ar/AgendarTramite?idPrestacion={SERVICIO_ID}"
 
 
@@ -28,19 +27,21 @@ def enviar_mensaje_telegram(mensaje):
 
 
 def consultar_turnos_api():
-    """Consulta directamente la API interna de SIGECI para obtener disponibilidad real."""
+    """Consulta la API interna de SIGECI enviando la fecha obligatoria."""
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Accept": "application/json, text/javascript, */*; q=0.01",
         "X-Requested-With": "XMLHttpRequest",
     }
 
-    # API de horas disponibles
-    api_url = f"https://formulario-sigeci.buenosaires.gob.ar/getHorasDisp"
+    # Fecha de hoy en formato YYYY-MM-DD
+    fecha_hoy = datetime.now().strftime("%Y-%m-%d")
+
+    api_url = "https://formulario-sigeci.buenosaires.gob.ar/getHorasDisp"
     params = {
+        "day": fecha_hoy,
         "sedeId": SEDE_ID,
         "servicioId": SERVICIO_ID
-        # Si se requiere especificar fecha puntual se puede agregar 'day': 'YYYY-MM-DD'
     }
 
     try:
@@ -50,22 +51,22 @@ def consultar_turnos_api():
             try:
                 datos = response.json()
             except Exception:
-                # Si no devuelve JSON válido pero la respuesta es correcta, analizamos el texto
                 datos = response.text
 
-            # Si la respuesta contiene datos/horarios (no está vacía ni es un array vacío '[]')
+            # Si la API devuelve un listado con horas (no vacío)
             if datos and datos != "[]" and datos != []:
                 mensaje = (
                     "🔔 <b>¡TURNOS DETECTADOS EN TIEMPO REAL!</b> 🔔\n\n"
+                    f"📅 <b>Fecha consultada:</b> {fecha_hoy}\n"
                     f"📍 <b>Sede ID:</b> {SEDE_ID}\n"
                     f"🎾 <b>Servicio ID:</b> {SERVICIO_ID}\n\n"
-                    f"⏰ <b>Disponibilidad:</b> Se encontraron cupos/horarios habilitados.\n\n"
+                    f"⏰ <b>Horarios encontrados:</b> {datos}\n\n"
                     f"🔗 <a href='{URL_RESERVA}'>ENTRAR Y RESERVAR AHORA</a>"
                 )
                 enviar_mensaje_telegram(mensaje)
-                print("¡ALERTA ENVIADA! Horarios detectados en la API.")
+                print("¡ALERTA ENVIADA! Horarios detectados.")
             else:
-                print("Verificación OK: La API devolvió sin disponibilidad actualmente.")
+                print(f"Verificación OK ({fecha_hoy}): Sin disponibilidad actual.")
         else:
             print(f"Error en la consulta a la API: Código {response.status_code}")
 
@@ -74,13 +75,12 @@ def consultar_turnos_api():
 
 
 if __name__ == "__main__":
-    print(f"Iniciando monitoreo de API interna para Sede {SEDE_ID} / Servicio {SERVICIO_ID}...")
+    print(f"Iniciando monitoreo de API para Sede {SEDE_ID} / Servicio {SERVICIO_ID}...")
     
-    # Notificación de arranque
     enviar_mensaje_telegram(
         f"🚀 <b>Bot Activo:</b> Monitoreando la API interna de turnos (Sede {SEDE_ID}) cada 5 minutos."
     )
 
     while True:
         consultar_turnos_api()
-        time.sleep(300)  # Revisa cada 5 minutos
+        time.sleep(300)
