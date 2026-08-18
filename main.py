@@ -1,17 +1,20 @@
 import os
 import time
 import requests
-from bs4 import BeautifulSoup
 
 # ==========================================
-# LECTURA DE VARIABLES DE ENTORNO EN RAILWAY
+# CONFIGURACIÓN Y CREDENCIALES
 # ==========================================
-TELEGRAM_TOKEN = "8869156451:AAFQibGkEs54JVhHpgCg_j0QDuLMmGFj-p8"
-TELEGRAM_CHAT_ID = "8295036704"
+# Se leen desde las Variables de Railway (o puedes poner los valores directamente entre comillas)
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8869156451:AAFQibGkEs54JVhHpgCg_j0QDuLMmGFj-p8")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "8295036704")
 
-# ID de la prestación específica (3149)
-ID_PRESTACION = "3149"
-URL_TRAMITE = f"https://formulario-sigeci.buenosaires.gob.ar/AgendarTramite?idPrestacion={ID_PRESTACION}"
+# Datos de la búsqueda en CABA (SIGECI)
+SEDE_ID = "2279"
+SERVICIO_ID = "3149"
+
+# Enlace directo de reserva para el usuario
+URL_RESERVA = f"https://formulario-sigeci.buenosaires.gob.ar/AgendarTramite?idPrestacion={SERVICIO_ID}"
 
 
 def enviar_mensaje_telegram(mensaje):
@@ -24,79 +27,60 @@ def enviar_mensaje_telegram(mensaje):
         print(f"Error enviando mensaje a Telegram: {e}")
 
 
-def consultar_turnos_exactos():
-    """Analiza estrictamente los selectores del calendario en SIGECI para evitar falsos positivos."""
+def consultar_turnos_api():
+    """Consulta directamente la API interna de SIGECI para obtener disponibilidad real."""
     headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/124.0.0.0 Safari/537.36"
-        ),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "Accept-Language": "es-ES,es;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "X-Requested-With": "XMLHttpRequest",
+    }
+
+    # API de horas disponibles
+    api_url = f"https://formulario-sigeci.buenosaires.gob.ar/getHorasDisp"
+    params = {
+        "sedeId": SEDE_ID,
+        "servicioId": SERVICIO_ID
+        # Si se requiere especificar fecha puntual se puede agregar 'day': 'YYYY-MM-DD'
     }
 
     try:
-        response = requests.get(URL_TRAMITE, headers=headers, timeout=15)
+        response = requests.get(api_url, headers=headers, params=params, timeout=15)
 
         if response.status_code == 200:
-            soup = BeautifulSoup(response.text, "html.parser")
+            try:
+                datos = response.json()
+            except Exception:
+                # Si no devuelve JSON válido pero la respuesta es correcta, analizamos el texto
+                datos = response.text
 
-            # 1. Verificar si existe el cartel explícito de "Sin Turnos"
-            alerta_sin_turnos = soup.find(id="divSinTurnos") or soup.find(
-                class_="alert-warning"
-            )
-
-            if alerta_sin_turnos and "no hay turnos" in alerta_sin_turnos.text.lower():
-                print("Verificación OK: No hay turnos disponibles actualmente.")
-                return
-
-            # 2. Buscar celdas de días habilitados en el calendario interactivo
-            dias_habilitados = soup.find_all(
-                "td", class_=lambda c: c and "day" in c and "disabled" not in c
-            )
-
-            # 3. Buscar selectores de horas activas
-            combo_horarios = soup.find("select", id="idHorario")
-            opciones_horas = []
-            if combo_horarios:
-                opciones_horas = [
-                    opt.text.strip()
-                    for opt in combo_horarios.find_all("option")
-                    if opt.get("value") and opt.get("value") != ""
-                ]
-
-            # Notificar solo si hay días libres o combo de horarios
-            if dias_habilitados or opciones_horas:
-                fechas = [d.text.strip() for d in dias_habilitados if d.text.strip()]
-
-                mensaje = "🔔 <b>¡TURNOS DISPONIBLES EN CABA!</b> 🔔\n\n"
-
-                if fechas:
-                    mensaje += f"📅 <b>Días libres en calendario:</b> {', '.join(fechas)}\n"
-                if opciones_horas:
-                    mensaje += f"⏰ <b>Horarios a reservar:</b> {', '.join(opciones_horas)}\n"
-
-                mensaje += f"\n🔗 <a href='{URL_TRAMITE}'>RESERVAR AHORA EN SIGECI</a>"
-
+            # Si la respuesta contiene datos/horarios (no está vacía ni es un array vacío '[]')
+            if datos and datos != "[]" and datos != []:
+                mensaje = (
+                    "🔔 <b>¡TURNOS DETECTADOS EN TIEMPO REAL!</b> 🔔\n\n"
+                    f"📍 <b>Sede ID:</b> {SEDE_ID}\n"
+                    f"🎾 <b>Servicio ID:</b> {SERVICIO_ID}\n\n"
+                    f"⏰ <b>Disponibilidad:</b> Se encontraron cupos/horarios habilitados.\n\n"
+                    f"🔗 <a href='{URL_RESERVA}'>ENTRAR Y RESERVAR AHORA</a>"
+                )
                 enviar_mensaje_telegram(mensaje)
-                print("¡ALERTA ENVIADA! Se encontraron turnos habilitados.")
+                print("¡ALERTA ENVIADA! Horarios detectados en la API.")
             else:
-                print("Verificación OK: Sin días habilitados en el calendario.")
-
+                print("Verificación OK: La API devolvió sin disponibilidad actualmente.")
         else:
-            print(f"Error del servidor SIGECI: Estado {response.status_code}")
+            print(f"Error en la consulta a la API: Código {response.status_code}")
 
     except Exception as e:
-        print(f"Error procesando la página: {e}")
+        print(f"Error al conectar con la API de SIGECI: {e}")
 
 
 if __name__ == "__main__":
-    print(f"Iniciando monitoreo continuo para prestación ID {ID_PRESTACION}...")
+    print(f"Iniciando monitoreo de API interna para Sede {SEDE_ID} / Servicio {SERVICIO_ID}...")
+    
+    # Notificación de arranque
     enviar_mensaje_telegram(
-        f"🚀 Bot iniciado: Monitoreando disponibilidad para la prestación ID {ID_PRESTACION} cada 5 minutos."
+        f"🚀 <b>Bot Activo:</b> Monitoreando la API interna de turnos (Sede {SEDE_ID}) cada 5 minutos."
     )
 
     while True:
-        consultar_turnos_exactos()
-        time.sleep(300)  # Revisa cada 5 minutos (300 segundos)
+        consultar_turnos_api()
+        time.sleep(300)  # Revisa cada 5 minutos
