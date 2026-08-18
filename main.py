@@ -9,13 +9,17 @@ from datetime import datetime, timedelta
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8869156451:AAFQibGkEs54JVhHpgCg_j0QDuLMmGFj-p8")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "8295036704")
 
+# Datos identificadores de CABA
 SEDE_ID = "2279"
 SERVICIO_ID = "3149"
 DIAS_A_CONSULTAR = 30  # Revisa los próximos 30 días
 
+# Datos legibles para la notificación
+NOMBRE_POLIDEPORTIVO = "Polideportivo Colegiales"
+DETALLE_CANCHA = "Cancha 2"  # Puedes poner "Cancha 1" o "Cancha 2"
+
 URL_RESERVA = f"https://formulario-sigeci.buenosaires.gob.ar/AgendarTramite?idPrestacion={SERVICIO_ID}"
 
-# Mapeo de días en español para evitar dependencias de idioma en el servidor
 DIAS_SEMANA = {
     "Monday": "Lunes",
     "Tuesday": "Martes",
@@ -29,8 +33,7 @@ DIAS_SEMANA = {
 
 def formatear_horarios(fecha_str, lista_iso):
     """
-    Convierte una fecha 'YYYY-MM-DD' y una lista de horas ISO 'YYYY-MM-DDTHH:MM:SS.000'
-    en un texto legible: 'Lunes 24/08: 13:00 hs, 14:00 hs'
+    Convierte la fecha y lista de horas ISO en texto claro: 'Lunes 24/08: 13:00 hs'
     """
     try:
         dt_fecha = datetime.strptime(fecha_str, "%Y-%m-%d")
@@ -40,14 +43,13 @@ def formatear_horarios(fecha_str, lista_iso):
         horas_limpias = []
         for item in lista_iso:
             try:
-                # Extrae la hora en formato HH:MM desde la cadena ISO
                 dt_hora = datetime.strptime(item.split(".")[0], "%Y-%m-%dT%H:%M:%S")
                 horas_limpias.append(dt_hora.strftime("%H:%M hs"))
             except Exception:
                 horas_limpias.append(str(item))
 
         return f"📅 <b>{dia_nombre} {fecha_corta}:</b> {', '.join(horas_limpias)}"
-    except Exception as e:
+    except Exception:
         return f"📅 <b>{fecha_str}:</b> {lista_iso}"
 
 
@@ -103,23 +105,23 @@ def consultar_turnos_api():
     if turnos_encontrados:
         resumen_turnos = "\n".join(turnos_encontrados)
         mensaje = (
-            "🔔 <b>¡TURNOS DETECTADOS EN CABA!</b> 🔔\n\n"
-            f"📍 <b>Sede ID:</b> {SEDE_ID}\n"
-            f"🎾 <b>Servicio ID:</b> {SERVICIO_ID}\n\n"
+            "🔔 <b>¡TURNO DISPONIBLE EN CABA!</b> 🔔\n\n"
+            f"📍 <b>Lugar:</b> {NOMBRE_POLIDEPORTIVO}\n"
+            f"🎾 <b>Cancha/Servicio:</b> {DETALLE_CANCHA}\n\n"
             f"<b>Disponibilidad encontrada:</b>\n{resumen_turnos}\n\n"
             f"🔗 <a href='{URL_RESERVA}'>RESERVAR AHORA EN SIGECI</a>"
         )
         enviar_mensaje_telegram(mensaje)
         print("¡ALERTA ENVIADA! Notificación enviada a Telegram.")
     else:
-        print(f"Verificación OK: Sin disponibilidad en los próximos {DIAS_A_CONSULTAR} días.")
+        print(f"Verificación OK: Sin disponibilidad en {NOMBRE_POLIDEPORTIVO} para los próximos {DIAS_A_CONSULTAR} días.")
 
 
 if __name__ == "__main__":
-    print(f"Iniciando monitoreo de API con barrido de {DIAS_A_CONSULTAR} días...")
+    print(f"Iniciando monitoreo para {NOMBRE_POLIDEPORTIVO}...")
 
     enviar_mensaje_telegram(
-        f"🚀 <b>Bot Activo:</b> Monitoreando los próximos {DIAS_A_CONSULTAR} días cada 5 minutos."
+        f"🚀 <b>Bot Activo:</b> Monitoreando {NOMBRE_POLIDEPORTIVO} ({DETALLE_CANCHA}) cada 5 minutos."
     )
 
     while True:
