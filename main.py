@@ -4,19 +4,18 @@ import requests
 from datetime import datetime, timedelta
 
 # ==========================================
-# CONFIGURACIÓN Y CREDENCIALES
+# CONFIGURACIÓN Y CREDENCIALES - COLEGIALES
 # ==========================================
 TELEGRAM_TOKEN = "8869156451:AAFQibGkEs54JVhHpgCg_j0QDuLMmGFj-p8"
 TELEGRAM_CHAT_ID = "8295036704"
 
 NOMBRE_POLIDEPORTIVO = "Polideportivo Colegiales"
+SEDE_ID = "2279"  # ID de Sede para Colegiales
 
-# Rango amplio de IDs de servicio para asegurar cobertura de Canchas 1 y 2
-# (Incluye el ID 3149 detectado recientemente)
+# IDs de servicio para Canchas en Colegiales (incluye 3149)
 SERVICIOS_IDS = [
-    "3140", "3141", "3142", "3143", "3144", "3145", 
-    "3146", "3147", "3148", "3149", "3150", "3151", 
-    "3152", "3153", "3154", "3155"
+    "3141", "3142", "3143", "3144", "3145", "3146",
+    "3147", "3148", "3149", "3156", "3157", "3158"
 ]
 
 DIAS_A_CONSULTAR = 30
@@ -44,31 +43,63 @@ def enviar_mensaje_telegram(mensaje):
         return False
 
 
-def formatear_horarios(fecha_str, lista_iso):
-    """Convierte fechas ISO a texto legible y genera claves para la memoria."""
-    lineas_texto = []
-    claves_turnos = []
+def obtener_fechas_disponibles(servicio_id, headers):
+    """
+    Paso 1: Consulta los días que REALMENTE tienen disponibilidad en SIGECI.
+    """
+    hoy = datetime.now()
+    mes_actual = hoy.strftime("%Y-%m")
+    mes_siguiente = (hoy + timedelta(days=30)).strftime("%Y-%m")
 
-    try:
-        dt_fecha = datetime.strptime(fecha_str, "%Y-%m-%d")
-        dia_nombre = DIAS_SEMANA.get(dt_fecha.strftime("%A"), dt_fecha.strftime("%A"))
-        fecha_corta = dt_fecha.strftime("%d/%m")
+    fechas_validas = set()
 
-        horas_limpias = []
-        for item in lista_iso:
+    for mes in list(dict.fromkeys([mes_actual, mes_siguiente])):
+        for endpoint in ["getFechasDisp", "getDiasDisp"]:
+            api_url = f"https://formulario-sigeci.buenosaires.gob.ar/{endpoint}"
+            params = {
+                "month": mes,
+                "sedeId": SEDE_ID,
+                "servicioId": servicio_id
+            }
             try:
-                dt_hora = datetime.strptime(str(item).split(".")[0], "%Y-%m-%dT%H:%M:%S")
-                hora_str = dt_hora.strftime("%H:%M hs")
-                horas_limpias.append(hora_str)
-                claves_turnos.append((fecha_str, hora_str))
+                res = requests.get(api_url, headers=headers, params=params, timeout=8)
+                if res.status_code == 200:
+                    datos = res.json()
+                    if isinstance(datos, list):
+                        for item in datos:
+                            if isinstance(item, str) and len(item) >= 10:
+                                fechas_validas.add(item[:10])
+                            elif isinstance(item, dict) and "fecha" in item:
+                                fechas_validas.add(str(item["fecha"])[:10])
             except Exception:
-                horas_limpias.append(str(item))
-                claves_turnos.append((fecha_str, str(item)))
+                pass
 
-        texto = f"📅 <b>{dia_nombre} {fecha_corta}:</b> {', '.join(horas_limpias)}"
-        return texto, claves_turnos
-    except Exception as e:
-        return f"📅 <b>{fecha_str}:</b> {lista_iso}", [(fecha_str, str(lista_iso))]
+    return sorted(list(fechas_validas))
+
+
+def extraer_horas_validas(lista_datos):
+    """Filtra y valida los bloques de hora recibidos."""
+    horas_validas = []
+    if not isinstance(lista_datos, list):
+        return horas_validas
+
+    for item in lista_datos:
+        item_str = str(item).strip()
+        if "T" in item_str:
+            try:
+                dt_hora = datetime.strptime(item_str.split(".")[0], "%Y-%m-%dT%H:%M:%S")
+                horas_validas.append(dt_hora.strftime("%H:%M hs"))
+            except ValueError:
+                pass
+        elif ":" in item_str and len(item_str) <= 8:
+            try:
+                partes = item_str.split(":")
+                hora_str = f"{int(partes[0]):02d}:{int(partes[1]):02d} hs"
+                horas_validas.append(hora_str)
+            except ValueError:
+                pass
+
+    return horas_validas
 
 
 def consultar_cancha(servicio_id):
@@ -83,53 +114,63 @@ def consultar_cancha(servicio_id):
     nombre_cancha = f"Cancha (ID {servicio_id})"
     url_reserva = f"https://formulario-sigeci.buenosaires.gob.ar/AgendarTramite?idPrestacion={servicio_id}"
 
+    # Paso 1: Consultar las fechas con disponibilidad real
+    fechas_disponibles = obtener_fechas_disponibles(servicio_id, headers)
+
     hoy = datetime.now()
+    fechas_a_revisar = fechas_disponibles if fechas_disponibles else [
+        (hoy + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(DIAS_A_CONSULTAR)
+    ]
+
     lineas_resumen = []
     turnos_nuevos_detectados = []
     turnos_visibles_hoy = set()
-    consulta_exitosa = False
+    hay_turnos_reales = False
 
-    for i in range(DIAS_A_CONSULTAR):
-        fecha_str = (hoy + timedelta(days=i)).strftime("%Y-%m-%d")
-
+    # Paso 2: Consultar únicamente los horarios para las fechas filtradas
+    for fecha_str in fechas_a_revisar:
         api_url = "https://formulario-sigeci.buenosaires.gob.ar/getHorasDisp"
         params = {
             "day": fecha_str,
+            "sedeId": SEDE_ID,
             "servicioId": servicio_id
         }
 
         try:
             response = requests.get(api_url, headers=headers, params=params, timeout=10)
-
             if response.status_code == 200:
                 try:
                     datos = response.json()
-                    if isinstance(datos, list):
-                        consulta_exitosa = True
                 except Exception:
                     datos = []
 
-                if datos and isinstance(datos, list) and len(datos) > 0:
-                    texto_linea, claves = formatear_horarios(fecha_str, datos)
+                if datos and isinstance(datos, list):
+                    horas_limpias = extraer_horas_validas(datos)
 
-                    for f, h in claves:
-                        clave_unica = f"{servicio_id}|{f}|{h}"
-                        turnos_visibles_hoy.add(clave_unica)
+                    if horas_limpias:
+                        hay_turnos_reales = True
+                        try:
+                            dt_fecha = datetime.strptime(fecha_str, "%Y-%m-%d")
+                            dia_nombre = DIAS_SEMANA.get(dt_fecha.strftime("%A"), dt_fecha.strftime("%A"))
+                            fecha_corta = dt_fecha.strftime("%d/%m")
+                            texto_linea = f"📅 <b>{dia_nombre} {fecha_corta}:</b> {', '.join(horas_limpias)}"
+                        except Exception:
+                            texto_linea = f"📅 <b>{fecha_str}:</b> {', '.join(horas_limpias)}"
 
-                        if clave_unica not in TURNOS_NOTIFICADOS:
-                            turnos_nuevos_detectados.append(clave_unica)
+                        for h in horas_limpias:
+                            clave_unica = f"{servicio_id}|{fecha_str}|{h}"
+                            turnos_visibles_hoy.add(clave_unica)
 
-                    lineas_resumen.append(texto_linea)
+                            if clave_unica not in TURNOS_NOTIFICADOS:
+                                turnos_nuevos_detectados.append(clave_unica)
 
+                        lineas_resumen.append(texto_linea)
         except Exception:
             pass
 
         time.sleep(0.05)
 
-    if not consulta_exitosa:
-        return
-
-    # Limpiar memoria de turnos tomados
+    # Limpiar memoria de turnos anteriores
     turnos_a_remover = [
         t for t in TURNOS_NOTIFICADOS 
         if t.startswith(f"{servicio_id}|") and t not in turnos_visibles_hoy
@@ -137,7 +178,7 @@ def consultar_cancha(servicio_id):
     for t in turnos_a_remover:
         TURNOS_NOTIFICADOS.remove(t)
 
-    # Notificar únicamente si hay turnos nuevos
+    # Notificación a Telegram
     if turnos_nuevos_detectados:
         resumen_turnos = "\n".join(lineas_resumen)
         mensaje = (
@@ -150,18 +191,18 @@ def consultar_cancha(servicio_id):
         if enviar_mensaje_telegram(mensaje):
             for t in turnos_nuevos_detectados:
                 TURNOS_NOTIFICADOS.add(t)
-            print(f"✅ ALERTA ENVIADA: {len(turnos_nuevos_detectados)} turnos nuevos en {nombre_cancha}.")
-    elif lineas_resumen:
+            print(f"✅ ALERTA ENVIADA: {len(turnos_nuevos_detectados)} turnos reales en {nombre_cancha}.")
+    elif hay_turnos_reales:
         print(f"ℹ️ {nombre_cancha}: Hay turnos libres pero ya fueron notificados.")
     else:
-        print(f"ℹ️ {nombre_cancha}: Sin disponibilidad.")
+        print(f"ℹ️ {nombre_cancha}: Sin disponibilidad real.")
 
 
 if __name__ == "__main__":
-    print(f"🚀 Iniciando monitoreo ampliado para {NOMBRE_POLIDEPORTIVO}...")
+    print(f"🚀 Iniciando monitoreo de 2 pasos para {NOMBRE_POLIDEPORTIVO}...")
 
     enviar_mensaje_telegram(
-        f"🚀 <b>Bot Activo:</b> Monitoreando canchas en {NOMBRE_POLIDEPORTIVO}."
+        f"🚀 <b>Bot Activo:</b> Monitoreando disponibilidad en {NOMBRE_POLIDEPORTIVO}."
     )
 
     while True:
