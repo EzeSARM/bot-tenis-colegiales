@@ -10,10 +10,13 @@ TELEGRAM_TOKEN = "8869156451:AAFQibGkEs54JVhHpgCg_j0QDuLMmGFj-p8"
 TELEGRAM_CHAT_ID = "8295036704"
 
 NOMBRE_POLIDEPORTIVO = "Polideportivo Colegiales"
-SEDE_ID = "2263"  # Sede ID confirmada para Colegiales
+SERVICIO_ID = "3149"
 
-# Único ID de prestación real
-SERVICIOS_IDS = ["3149"]
+# Configuración de las dos canchas con sus respectivos sedeId
+CANCHAS = [
+    {"nombre": "Cancha 1", "sede_id": "2263"},
+    {"nombre": "Cancha 2", "sede_id": "2279"}
+]
 
 DIAS_A_CONSULTAR = 30
 TURNOS_NOTIFICADOS = set()
@@ -40,22 +43,22 @@ def enviar_mensaje_telegram(mensaje):
         return False
 
 
-def crear_sesion_sigeci(servicio_id):
-    """Inicializa la sesión HTTP para obtener PHPSESSID legítima."""
+def crear_sesion_sigeci():
+    """Inicializa la sesión HTTP para obtener la cookie PHPSESSID legítima."""
     session = requests.Session()
     session.headers.update({
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
         "Accept": "*/*",
         "Accept-Language": "es-419,es;q=0.9,en;q=0.8",
         "X-Requested-With": "XMLHttpRequest",
-        "Referer": f"https://formulario-sigeci.buenosaires.gob.ar/AgendarTramite?idPrestacion={servicio_id}&flow=primeros"
+        "Referer": f"https://formulario-sigeci.buenosaires.gob.ar/AgendarTramite?idPrestacion={SERVICIO_ID}&flow=primeros"
     })
     
-    url_inicio = f"https://formulario-sigeci.buenosaires.gob.ar/AgendarTramite?idPrestacion={servicio_id}&flow=primeros"
+    url_inicio = f"https://formulario-sigeci.buenosaires.gob.ar/AgendarTramite?idPrestacion={SERVICIO_ID}&flow=primeros"
     try:
         session.get(url_inicio, timeout=10)
     except Exception as e:
-        print(f"⚠️ Aviso inicializando sesión para ID {servicio_id}: {e}")
+        print(f"⚠️ Aviso inicializando sesión: {e}")
         
     return session
 
@@ -89,12 +92,14 @@ def extraer_horas_validas(lista_datos):
     return sorted(list(set(horas_validas)))
 
 
-def consultar_cancha(servicio_id):
+def consultar_cancha(cancha_info):
     global TURNOS_NOTIFICADOS
 
-    session = crear_sesion_sigeci(servicio_id)
-    nombre_cancha = f"Cancha (ID {servicio_id})"
-    url_reserva = f"https://formulario-sigeci.buenosaires.gob.ar/AgendarTramite?idPrestacion={servicio_id}"
+    nombre_cancha = cancha_info["nombre"]
+    sede_id = cancha_info["sede_id"]
+
+    session = crear_sesion_sigeci()
+    url_reserva = f"https://formulario-sigeci.buenosaires.gob.ar/AgendarTramite?idPrestacion={SERVICIO_ID}"
 
     hoy = datetime.now()
     lineas_resumen = []
@@ -108,8 +113,8 @@ def consultar_cancha(servicio_id):
         api_url = "https://formulario-sigeci.buenosaires.gob.ar/getHorasDisp"
         params = {
             "day": fecha_str,
-            "sedeId": SEDE_ID,
-            "servicioId": servicio_id
+            "sedeId": sede_id,
+            "servicioId": SERVICIO_ID
         }
 
         try:
@@ -135,7 +140,7 @@ def consultar_cancha(servicio_id):
                             texto_linea = f"📅 <b>{fecha_str}:</b> {', '.join(horas_limpias)}"
 
                         for h in horas_limpias:
-                            clave_unica = f"{servicio_id}|{fecha_str}|{h}"
+                            clave_unica = f"{sede_id}|{fecha_str}|{h}"
                             turnos_visibles_hoy.add(clave_unica)
 
                             if clave_unica not in TURNOS_NOTIFICADOS:
@@ -147,10 +152,10 @@ def consultar_cancha(servicio_id):
 
         time.sleep(0.05)
 
-    # Limpiar memoria de turnos antiguos que ya no están disponibles
+    # Limpiar memoria de turnos antiguos que ya no están disponibles para esta sede
     turnos_a_remover = [
         t for t in TURNOS_NOTIFICADOS 
-        if t.startswith(f"{servicio_id}|") and t not in turnos_visibles_hoy
+        if t.startswith(f"{sede_id}|") and t not in turnos_visibles_hoy
     ]
     for t in turnos_a_remover:
         TURNOS_NOTIFICADOS.remove(t)
@@ -161,31 +166,31 @@ def consultar_cancha(servicio_id):
         mensaje = (
             "🔔 <b>¡NUEVO TURNO DISPONIBLE EN CABA!</b> 🔔\n\n"
             f"📍 <b>Lugar:</b> {NOMBRE_POLIDEPORTIVO}\n"
-            f"🎾 <b>Opción:</b> {nombre_cancha}\n\n"
+            f"🎾 <b>Cancha:</b> {nombre_cancha}\n\n"
             f"<b>Disponibilidad encontrada:</b>\n{resumen_turnos}\n\n"
             f"🔗 <a href='{url_reserva}'>RESERVAR AHORA EN SIGECI</a>"
         )
         if enviar_mensaje_telegram(mensaje):
             for t in turnos_nuevos_detectados:
                 TURNOS_NOTIFICADOS.add(t)
-            print(f"✅ ALERTA ENVIADA: {len(turnos_nuevos_detectados)} turnos reales en {nombre_cancha}.")
+            print(f"✅ ALERTA ENVIADA: {len(turnos_nuevos_detectados)} turnos nuevos en {nombre_cancha}.")
     elif hay_turnos_reales:
-        print(f"ℹ️ {nombre_cancha}: Hay turnos libres pero ya fueron notificados.")
+        print(f"ℹ️ {nombre_cancha} (Sede {sede_id}): Hay turnos libres pero ya fueron notificados.")
     else:
-        print(f"ℹ️ {nombre_cancha}: Sin disponibilidad real.")
+        print(f"ℹ️ {nombre_cancha} (Sede {sede_id}): Sin disponibilidad real.")
 
 
 if __name__ == "__main__":
-    print(f"🚀 Iniciando monitoreo enfocado para {NOMBRE_POLIDEPORTIVO} (ID {SERVICIOS_IDS[0]})...")
+    print(f"🚀 Iniciando monitoreo de Cancha 1 y Cancha 2 en {NOMBRE_POLIDEPORTIVO}...")
 
     enviar_mensaje_telegram(
-        f"🚀 <b>Bot Activo:</b> Monitoreando disponibilidad directa en {NOMBRE_POLIDEPORTIVO}."
+        f"🚀 <b>Bot Activo:</b> Monitoreando Cancha 1 y Cancha 2 en {NOMBRE_POLIDEPORTIVO}."
     )
 
     while True:
         try:
-            for s_id in SERVICIOS_IDS:
-                consultar_cancha(s_id)
+            for cancha in CANCHAS:
+                consultar_cancha(cancha)
                 time.sleep(0.5)
         except Exception as main_e:
             print(f"❌ Error en el bucle principal: {main_e}")
