@@ -6,46 +6,46 @@ from datetime import datetime, timedelta
 # ==========================================
 # CONFIGURACIÓN Y CREDENCIALES
 # ==========================================
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8869156451:AAFQibGkEs54JVhHpgCg_j0QDuLMmGFj-p8")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "8295036704")
+TELEGRAM_TOKEN = "8869156451:AAFQibGkEs54JVhHpgCg_j0QDuLMmGFj-p8"
+TELEGRAM_CHAT_ID = "8295036704"
 
-SEDE_ID = "2279"  # Polideportivo Colegiales
-DIAS_A_CONSULTAR = 30  # Revisa los próximos 30 días
+NOMBRE_POLIDEPORTIVO = "Polideportivo Colegiales"
 
-# CONFIGURACIÓN DE CANCHAS
-CANCHAS = [
-    {
-        "nombre": "Cancha 1",
-        "servicio_id": "3149",
-        "url": "https://formulario-sigeci.buenosaires.gob.ar/AgendarTramite?idPrestacion=3149"
-    },
-    {
-        "nombre": "Cancha 2",
-        "servicio_id": "3150",  # Reemplaza 3150 por el ID real de la Cancha 2
-        "url": "https://formulario-sigeci.buenosaires.gob.ar/AgendarTramite?idPrestacion=3150"
-    }
+# Rango amplio de IDs de servicio para asegurar cobertura de Canchas 1 y 2
+# (Incluye el ID 3149 detectado recientemente)
+SERVICIOS_IDS = [
+    "3140", "3141", "3142", "3143", "3144", "3145", 
+    "3146", "3147", "3148", "3149", "3150", "3151", 
+    "3152", "3153", "3154", "3155"
 ]
 
-# Conjunto global para recordar turnos que ya fueron notificados
-# Estructura de cada elemento: "NOMBRE_CANCHA|FECHA|HORA"
+DIAS_A_CONSULTAR = 30
 TURNOS_NOTIFICADOS = set()
 
 DIAS_SEMANA = {
-    "Monday": "Lunes",
-    "Tuesday": "Martes",
-    "Wednesday": "Miércoles",
-    "Thursday": "Jueves",
-    "Friday": "Viernes",
-    "Saturday": "Sábado",
-    "Sunday": "Domingo"
+    "Monday": "Lunes", "Tuesday": "Martes", "Wednesday": "Miércoles",
+    "Thursday": "Jueves", "Friday": "Viernes", "Saturday": "Sábado", "Sunday": "Domingo"
 }
 
 
+def enviar_mensaje_telegram(mensaje):
+    """Envía un mensaje a Telegram en formato HTML."""
+    if not TELEGRAM_TOKEN or TELEGRAM_TOKEN.startswith("COLOCA_AQUI"):
+        print("❌ Error: Debes ingresar tu TELEGRAM_TOKEN en el archivo main.py.")
+        return False
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": mensaje, "parse_mode": "HTML"}
+    try:
+        res = requests.post(url, json=payload, timeout=10)
+        return res.status_code == 200
+    except Exception as e:
+        print(f"❌ Error enviando a Telegram: {e}")
+        return False
+
+
 def formatear_horarios(fecha_str, lista_iso):
-    """
-    Convierte la fecha y lista de horas ISO en texto claro y devuelve
-    tanto las líneas formateadas como los identificadores únicos para la memoria.
-    """
+    """Convierte fechas ISO a texto legible y genera claves para la memoria."""
     lineas_texto = []
     claves_turnos = []
 
@@ -57,7 +57,7 @@ def formatear_horarios(fecha_str, lista_iso):
         horas_limpias = []
         for item in lista_iso:
             try:
-                dt_hora = datetime.strptime(item.split(".")[0], "%Y-%m-%dT%H:%M:%S")
+                dt_hora = datetime.strptime(str(item).split(".")[0], "%Y-%m-%dT%H:%M:%S")
                 hora_str = dt_hora.strftime("%H:%M hs")
                 horas_limpias.append(hora_str)
                 claves_turnos.append((fecha_str, hora_str))
@@ -67,22 +67,11 @@ def formatear_horarios(fecha_str, lista_iso):
 
         texto = f"📅 <b>{dia_nombre} {fecha_corta}:</b> {', '.join(horas_limpias)}"
         return texto, claves_turnos
-    except Exception:
+    except Exception as e:
         return f"📅 <b>{fecha_str}:</b> {lista_iso}", [(fecha_str, str(lista_iso))]
 
 
-def enviar_mensaje_telegram(mensaje):
-    """Envía una notificación al chat de Telegram."""
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": mensaje, "parse_mode": "HTML"}
-    try:
-        requests.post(url, json=payload, timeout=10)
-    except Exception as e:
-        print(f"Error enviando mensaje a Telegram: {e}")
-
-
-def consultar_cancha(cancha):
-    """Consulta la API de SIGECI y envía alertas solo para turnos nuevos."""
+def consultar_cancha(servicio_id):
     global TURNOS_NOTIFICADOS
 
     headers = {
@@ -91,10 +80,14 @@ def consultar_cancha(cancha):
         "X-Requested-With": "XMLHttpRequest",
     }
 
+    nombre_cancha = f"Cancha (ID {servicio_id})"
+    url_reserva = f"https://formulario-sigeci.buenosaires.gob.ar/AgendarTramite?idPrestacion={servicio_id}"
+
     hoy = datetime.now()
     lineas_resumen = []
     turnos_nuevos_detectados = []
     turnos_visibles_hoy = set()
+    consulta_exitosa = False
 
     for i in range(DIAS_A_CONSULTAR):
         fecha_str = (hoy + timedelta(days=i)).strftime("%Y-%m-%d")
@@ -102,8 +95,7 @@ def consultar_cancha(cancha):
         api_url = "https://formulario-sigeci.buenosaires.gob.ar/getHorasDisp"
         params = {
             "day": fecha_str,
-            "sedeId": SEDE_ID,
-            "servicioId": cancha["servicio_id"]
+            "servicioId": servicio_id
         }
 
         try:
@@ -112,71 +104,72 @@ def consultar_cancha(cancha):
             if response.status_code == 200:
                 try:
                     datos = response.json()
+                    if isinstance(datos, list):
+                        consulta_exitosa = True
                 except Exception:
                     datos = []
 
                 if datos and isinstance(datos, list) and len(datos) > 0:
                     texto_linea, claves = formatear_horarios(fecha_str, datos)
 
-                    # Registrar cada turno visible en esta consulta
                     for f, h in claves:
-                        clave_unica = f"{cancha['nombre']}|{f}|{h}"
+                        clave_unica = f"{servicio_id}|{f}|{h}"
                         turnos_visibles_hoy.add(clave_unica)
 
-                        # Verificar si es un turno verdaderamente nuevo
                         if clave_unica not in TURNOS_NOTIFICADOS:
                             turnos_nuevos_detectados.append(clave_unica)
 
                     lineas_resumen.append(texto_linea)
 
-        except Exception as e:
-            print(f"Error consultando {cancha['nombre']} para el día {fecha_str}: {e}")
+        except Exception:
+            pass
 
-        time.sleep(0.2)
+        time.sleep(0.05)
 
-    # Limpiar de la memoria los turnos de esta cancha que ya no están disponibles
-    # (por ejemplo, si fueron reservados por alguien)
+    if not consulta_exitosa:
+        return
+
+    # Limpiar memoria de turnos tomados
     turnos_a_remover = [
         t for t in TURNOS_NOTIFICADOS 
-        if t.startswith(f"{cancha['nombre']}|") and t not in turnos_visibles_hoy
+        if t.startswith(f"{servicio_id}|") and t not in turnos_visibles_hoy
     ]
     for t in turnos_a_remover:
         TURNOS_NOTIFICADOS.remove(t)
 
-    # SI HAY TURNOS NUEVOS, ENVIAMOS LA ALERTA
+    # Notificar únicamente si hay turnos nuevos
     if turnos_nuevos_detectados:
         resumen_turnos = "\n".join(lineas_resumen)
         mensaje = (
             "🔔 <b>¡NUEVO TURNO DISPONIBLE EN CABA!</b> 🔔\n\n"
-            f"📍 <b>Lugar:</b> Polideportivo Colegiales\n"
-            f"🎾 <b>Cancha:</b> {cancha['nombre']}\n\n"
+            f"📍 <b>Lugar:</b> {NOMBRE_POLIDEPORTIVO}\n"
+            f"🎾 <b>Opción:</b> {nombre_cancha}\n\n"
             f"<b>Disponibilidad encontrada:</b>\n{resumen_turnos}\n\n"
-            f"🔗 <a href='{cancha['url']}'>RESERVAR AHORA EN SIGECI</a>"
+            f"🔗 <a href='{url_reserva}'>RESERVAR AHORA EN SIGECI</a>"
         )
-        enviar_mensaje_telegram(mensaje)
-
-        # Marcar los nuevos turnos como notificados
-        for t in turnos_nuevos_detectados:
-            TURNOS_NOTIFICADOS.add(t)
-
-        print(f"¡ALERTA ENVIADA! Se encontraron {len(turnos_nuevos_detectados)} turnos nuevos en {cancha['nombre']}.")
+        if enviar_mensaje_telegram(mensaje):
+            for t in turnos_nuevos_detectados:
+                TURNOS_NOTIFICADOS.add(t)
+            print(f"✅ ALERTA ENVIADA: {len(turnos_nuevos_detectados)} turnos nuevos en {nombre_cancha}.")
     elif lineas_resumen:
-        print(f"Verificación OK: Hay turnos en {cancha['nombre']}, pero ya fueron notificados anteriormente.")
+        print(f"ℹ️ {nombre_cancha}: Hay turnos libres pero ya fueron notificados.")
     else:
-        print(f"Verificación OK: Sin disponibilidad en {cancha['nombre']}.")
+        print(f"ℹ️ {nombre_cancha}: Sin disponibilidad.")
 
 
 if __name__ == "__main__":
-    nombres_canchas = ", ".join([c["nombre"] for c in CANCHAS])
-    print(f"Iniciando monitoreo sin alertas repetidas para: {nombres_canchas}...")
+    print(f"🚀 Iniciando monitoreo ampliado para {NOMBRE_POLIDEPORTIVO}...")
 
     enviar_mensaje_telegram(
-        f"🚀 <b>Bot Activo:</b> Monitoreando {nombres_canchas} sin alertas repetidas (cada 5 min)."
+        f"🚀 <b>Bot Activo:</b> Monitoreando canchas en {NOMBRE_POLIDEPORTIVO}."
     )
 
     while True:
-        for cancha in CANCHAS:
-            consultar_cancha(cancha)
-            time.sleep(1)
+        try:
+            for s_id in SERVICIOS_IDS:
+                consultar_cancha(s_id)
+                time.sleep(0.5)
+        except Exception as main_e:
+            print(f"❌ Error en el bucle principal: {main_e}")
 
         time.sleep(300)
