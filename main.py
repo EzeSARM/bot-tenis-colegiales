@@ -10,13 +10,10 @@ TELEGRAM_TOKEN = "8869156451:AAFQibGkEs54JVhHpgCg_j0QDuLMmGFj-p8"
 TELEGRAM_CHAT_ID = "8295036704"
 
 NOMBRE_POLIDEPORTIVO = "Polideportivo Colegiales"
-SEDE_ID = "2263"  # Sede ID exacta confirmada vía cURL para Colegiales
+SEDE_ID = "2263"  # Sede ID confirmada para Colegiales
 
-# IDs de servicio para Colegiales
-SERVICIOS_IDS = [
-    "3141", "3142", "3143", "3144", "3145", "3146",
-    "3147", "3148", "3149", "3156", "3157", "3158"
-]
+# Único ID de prestación real
+SERVICIOS_IDS = ["3149"]
 
 DIAS_A_CONSULTAR = 30
 TURNOS_NOTIFICADOS = set()
@@ -44,10 +41,7 @@ def enviar_mensaje_telegram(mensaje):
 
 
 def crear_sesion_sigeci(servicio_id):
-    """
-    Crea una sesión HTTP y visita el flujo inicial para obtener cookies
-    válidas (PHPSESSID) exactamente igual a un navegador.
-    """
+    """Inicializa la sesión HTTP para obtener PHPSESSID legítima."""
     session = requests.Session()
     session.headers.update({
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
@@ -67,10 +61,7 @@ def crear_sesion_sigeci(servicio_id):
 
 
 def extraer_horas_validas(lista_datos):
-    """
-    Valida que los horarios sean cadenas con formato ISO / HH:MM real.
-    Filtra respuestas ambiguas o vacías.
-    """
+    """Extrae y limpia los horarios reales devueltos por la API."""
     horas_validas = []
     if not isinstance(lista_datos, list):
         return horas_validas
@@ -156,7 +147,7 @@ def consultar_cancha(servicio_id):
 
         time.sleep(0.05)
 
-    # Limpiar memoria de turnos viejos
+    # Limpiar memoria de turnos antiguos que ya no están disponibles
     turnos_a_remover = [
         t for t in TURNOS_NOTIFICADOS 
         if t.startswith(f"{servicio_id}|") and t not in turnos_visibles_hoy
@@ -185,10 +176,10 @@ def consultar_cancha(servicio_id):
 
 
 if __name__ == "__main__":
-    print(f"🚀 Iniciando monitoreo autenticado para {NOMBRE_POLIDEPORTIVO} (Sede {SEDE_ID})...")
+    print(f"🚀 Iniciando monitoreo enfocado para {NOMBRE_POLIDEPORTIVO} (ID {SERVICIOS_IDS[0]})...")
 
     enviar_mensaje_telegram(
-        f"🚀 <b>Bot Activo:</b> Monitoreando disponibilidad completa en {NOMBRE_POLIDEPORTIVO}."
+        f"🚀 <b>Bot Activo:</b> Monitoreando disponibilidad directa en {NOMBRE_POLIDEPORTIVO}."
     )
 
     while True:
