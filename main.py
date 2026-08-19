@@ -10,9 +10,9 @@ TELEGRAM_TOKEN = "8869156451:AAFQibGkEs54JVhHpgCg_j0QDuLMmGFj-p8"
 TELEGRAM_CHAT_ID = "8295036704"
 
 NOMBRE_POLIDEPORTIVO = "Polideportivo Colegiales"
-SEDE_ID = "2279"  # ID de Sede para Colegiales
+SEDE_ID = "2263"  # Sede ID exacta confirmada vía cURL para Colegiales
 
-# IDs de servicio para Canchas en Colegiales (incluye 3149)
+# IDs de servicio para Colegiales
 SERVICIOS_IDS = [
     "3141", "3142", "3143", "3144", "3145", "3146",
     "3147", "3148", "3149", "3156", "3157", "3158"
@@ -43,48 +43,44 @@ def enviar_mensaje_telegram(mensaje):
         return False
 
 
-def obtener_fechas_disponibles(servicio_id, headers):
+def crear_sesion_sigeci(servicio_id):
     """
-    Paso 1: Consulta los días que REALMENTE tienen disponibilidad en SIGECI.
+    Crea una sesión HTTP y visita el flujo inicial para obtener cookies
+    válidas (PHPSESSID) exactamente igual a un navegador.
     """
-    hoy = datetime.now()
-    mes_actual = hoy.strftime("%Y-%m")
-    mes_siguiente = (hoy + timedelta(days=30)).strftime("%Y-%m")
-
-    fechas_validas = set()
-
-    for mes in list(dict.fromkeys([mes_actual, mes_siguiente])):
-        for endpoint in ["getFechasDisp", "getDiasDisp"]:
-            api_url = f"https://formulario-sigeci.buenosaires.gob.ar/{endpoint}"
-            params = {
-                "month": mes,
-                "sedeId": SEDE_ID,
-                "servicioId": servicio_id
-            }
-            try:
-                res = requests.get(api_url, headers=headers, params=params, timeout=8)
-                if res.status_code == 200:
-                    datos = res.json()
-                    if isinstance(datos, list):
-                        for item in datos:
-                            if isinstance(item, str) and len(item) >= 10:
-                                fechas_validas.add(item[:10])
-                            elif isinstance(item, dict) and "fecha" in item:
-                                fechas_validas.add(str(item["fecha"])[:10])
-            except Exception:
-                pass
-
-    return sorted(list(fechas_validas))
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+        "Accept": "*/*",
+        "Accept-Language": "es-419,es;q=0.9,en;q=0.8",
+        "X-Requested-With": "XMLHttpRequest",
+        "Referer": f"https://formulario-sigeci.buenosaires.gob.ar/AgendarTramite?idPrestacion={servicio_id}&flow=primeros"
+    })
+    
+    url_inicio = f"https://formulario-sigeci.buenosaires.gob.ar/AgendarTramite?idPrestacion={servicio_id}&flow=primeros"
+    try:
+        session.get(url_inicio, timeout=10)
+    except Exception as e:
+        print(f"⚠️ Aviso inicializando sesión para ID {servicio_id}: {e}")
+        
+    return session
 
 
 def extraer_horas_validas(lista_datos):
-    """Filtra y valida los bloques de hora recibidos."""
+    """
+    Valida que los horarios sean cadenas con formato ISO / HH:MM real.
+    Filtra respuestas ambiguas o vacías.
+    """
     horas_validas = []
     if not isinstance(lista_datos, list):
         return horas_validas
 
     for item in lista_datos:
-        item_str = str(item).strip()
+        if not isinstance(item, str):
+            continue
+
+        item_str = item.strip()
+
         if "T" in item_str:
             try:
                 dt_hora = datetime.strptime(item_str.split(".")[0], "%Y-%m-%dT%H:%M:%S")
@@ -99,36 +95,25 @@ def extraer_horas_validas(lista_datos):
             except ValueError:
                 pass
 
-    return horas_validas
+    return sorted(list(set(horas_validas)))
 
 
 def consultar_cancha(servicio_id):
     global TURNOS_NOTIFICADOS
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/javascript, */*; q=0.01",
-        "X-Requested-With": "XMLHttpRequest",
-    }
-
+    session = crear_sesion_sigeci(servicio_id)
     nombre_cancha = f"Cancha (ID {servicio_id})"
     url_reserva = f"https://formulario-sigeci.buenosaires.gob.ar/AgendarTramite?idPrestacion={servicio_id}"
 
-    # Paso 1: Consultar las fechas con disponibilidad real
-    fechas_disponibles = obtener_fechas_disponibles(servicio_id, headers)
-
     hoy = datetime.now()
-    fechas_a_revisar = fechas_disponibles if fechas_disponibles else [
-        (hoy + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(DIAS_A_CONSULTAR)
-    ]
-
     lineas_resumen = []
     turnos_nuevos_detectados = []
     turnos_visibles_hoy = set()
     hay_turnos_reales = False
 
-    # Paso 2: Consultar únicamente los horarios para las fechas filtradas
-    for fecha_str in fechas_a_revisar:
+    for i in range(DIAS_A_CONSULTAR):
+        fecha_str = (hoy + timedelta(days=i)).strftime("%Y-%m-%d")
+
         api_url = "https://formulario-sigeci.buenosaires.gob.ar/getHorasDisp"
         params = {
             "day": fecha_str,
@@ -137,7 +122,8 @@ def consultar_cancha(servicio_id):
         }
 
         try:
-            response = requests.get(api_url, headers=headers, params=params, timeout=10)
+            response = session.get(api_url, params=params, timeout=8)
+
             if response.status_code == 200:
                 try:
                     datos = response.json()
@@ -170,7 +156,7 @@ def consultar_cancha(servicio_id):
 
         time.sleep(0.05)
 
-    # Limpiar memoria de turnos anteriores
+    # Limpiar memoria de turnos viejos
     turnos_a_remover = [
         t for t in TURNOS_NOTIFICADOS 
         if t.startswith(f"{servicio_id}|") and t not in turnos_visibles_hoy
@@ -199,10 +185,10 @@ def consultar_cancha(servicio_id):
 
 
 if __name__ == "__main__":
-    print(f"🚀 Iniciando monitoreo de 2 pasos para {NOMBRE_POLIDEPORTIVO}...")
+    print(f"🚀 Iniciando monitoreo autenticado para {NOMBRE_POLIDEPORTIVO} (Sede {SEDE_ID})...")
 
     enviar_mensaje_telegram(
-        f"🚀 <b>Bot Activo:</b> Monitoreando disponibilidad en {NOMBRE_POLIDEPORTIVO}."
+        f"🚀 <b>Bot Activo:</b> Monitoreando disponibilidad completa en {NOMBRE_POLIDEPORTIVO}."
     )
 
     while True:
