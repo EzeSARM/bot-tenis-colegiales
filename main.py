@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 # ==========================================
 # CONFIGURACIÓN Y CREDENCIALES
 # ==========================================
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8527874934:AAEkI3Mz-AD0sNpO2caooNM9sWyhw56x3iE")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8869156451:AAFQibGkEs54JVhHpgCg_j0QDuLMmGFj-p8")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "8295036704")
 
 NOMBRE_POLIDEPORTIVO = "Polideportivo Colegiales"
