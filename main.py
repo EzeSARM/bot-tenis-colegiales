@@ -1,8 +1,6 @@
 import os
 import time
-import threading
 import requests
-from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timedelta
 
 # ==========================================
@@ -27,34 +25,12 @@ DIAS_SEMANA = {
 }
 
 LAST_UPDATE_ID = None
-TURNOS_NOTIFICADOS = set()  # Memoria de turnos ya informados
 
-# ==========================================
-# SERVIDOR WEB PARA RAILWAY (HEALTH CHECK)
-# ==========================================
-class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header('Content-type', 'text/html; charset=utf-8')
-        self.end_headers()
-        self.wfile.write(f"🤖 Bot {NOMBRE_POLIDEPORTIVO} Activo 24/7 en Railway".encode('utf-8'))
-
-    def log_message(self, format, *args):
-        return
-
-def iniciar_servidor_web():
-    port = int(os.getenv("PORT", 8080))
-    server = HTTPServer(('0.0.0.0', port), SimpleHTTPRequestHandler)
-    print(f"🌐 Servidor web iniciado en puerto {port}")
-    server.serve_forever()
-
-# ==========================================
-# FUNCIONES DE TELEGRAM Y SIGECI
-# ==========================================
 def enviar_mensaje_telegram(mensaje, chat_id=None):
+    """Envía un mensaje a Telegram en formato HTML."""
     target_chat_id = chat_id or TELEGRAM_CHAT_ID
     if not TELEGRAM_TOKEN or not target_chat_id:
-        print("❌ Error: Faltan las variables de entorno TELEGRAM_TOKEN o TELEGRAM_CHAT_ID.")
+        print("❌ Error: Faltan credenciales de Telegram.")
         return False
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -72,6 +48,7 @@ def enviar_mensaje_telegram(mensaje, chat_id=None):
         return False
 
 def crear_sesion_sigeci():
+    """Inicializa la sesión HTTP con los encabezados adecuados para SIGECI."""
     session = requests.Session()
     session.headers.update({
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
@@ -89,6 +66,7 @@ def crear_sesion_sigeci():
     return session
 
 def extraer_horas_validas(lista_datos):
+    """Extrae y limpia los horarios reales devueltos por la API."""
     horas_validas = []
     if not isinstance(lista_datos, list):
         return horas_validas
@@ -116,6 +94,7 @@ def extraer_horas_validas(lista_datos):
     return sorted(list(set(horas_validas)))
 
 def consultar_turnos_cancha(session, sede_id, fecha_str):
+    """Consulta la API de SIGECI para una cancha y fecha específica."""
     url = "https://formulario-sigeci.buenosaires.gob.ar/getHorasDisp"
     params = {
         "day": fecha_str,
@@ -134,9 +113,8 @@ def consultar_turnos_cancha(session, sede_id, fecha_str):
         print(f"Error al consultar sede {sede_id} para la fecha {fecha_str}: {e}")
     return []
 
-def obtener_estado_turnos():
-    """Realiza la búsqueda y retorna los turnos visibles, nuevos y el texto formateado."""
-    global TURNOS_NOTIFICADOS
+def escanear_disponibilidad():
+    """Escanea las dos canchas de Colegiales y devuelve un resumen formateado."""
     session = crear_sesion_sigeci()
     url_reserva = f"https://formulario-sigeci.buenosaires.gob.ar/AgendarTramite?idPrestacion={SERVICIO_ID}&flow=primeros"
 
@@ -145,43 +123,43 @@ def obtener_estado_turnos():
 
     print(f"[{datetime.now().strftime('%H:%M:%S')}] Escaneando turnos en {NOMBRE_POLIDEPORTIVO}...")
 
-    lineas_todas = []
-    lineas_nuevas = []
-    turnos_visibles_actualmente = set()
+    lineas_notificacion = []
 
     for cancha in CANCHAS:
         for fecha in fechas_a_consultar:
             horas = consultar_turnos_cancha(session, cancha["sede_id"], fecha)
             if horas:
-                dt_fecha = datetime.strptime(fecha, "%Y-%m-%d")
-                dia_nombre = DIAS_SEMANA.get(dt_fecha.strftime("%A"), dt_fecha.strftime("%A"))
-                fecha_corta = dt_fecha.strftime("%d/%m")
-                
-                horas_nuevas_cancha = []
-                for h in horas:
-                    clave_unica = f"{cancha['sede_id']}|{fecha}|{h}"
-                    turnos_visibles_actualmente.add(clave_unica)
-                    if clave_unica not in TURNOS_NOTIFICADOS:
-                        horas_nuevas_cancha.append(h)
-
-                lineas_todas.append(
-                    f"🎾 <b>{cancha['nombre']}</b> - 📅 <b>{dia_nombre} {fecha_corta}:</b> {', '.join(horas)}"
-                )
-
-                if horas_nuevas_cancha:
-                    lineas_nuevas.append(
-                        f"🎾 <b>{cancha['nombre']}</b> - 📅 <b>{dia_nombre} {fecha_corta}:</b> {', '.join(horas_nuevas_cancha)}"
+                try:
+                    dt_fecha = datetime.strptime(fecha, "%Y-%m-%d")
+                    dia_nombre = DIAS_SEMANA.get(dt_fecha.strftime("%A"), dt_fecha.strftime("%A"))
+                    fecha_corta = dt_fecha.strftime("%d/%m")
+                    lineas_notificacion.append(
+                        f"🎾 <b>{cancha['nombre']}</b> - 📅 <b>{dia_nombre} {fecha_corta}:</b> {', '.join(horas)}"
+                    )
+                except Exception:
+                    lineas_notificacion.append(
+                        f"🎾 <b>{cancha['nombre']}</b> - 📅 <b>{fecha}:</b> {', '.join(horas)}"
                     )
 
             time.sleep(0.05)
 
-    TURNOS_NOTIFICADOS = TURNOS_NOTIFICADOS.intersection(turnos_visibles_actualmente)
-
-    return lineas_todas, lineas_nuevas, turnos_visibles_actualmente, url_reserva
+    if lineas_notificacion:
+        resumen = "\n".join(lineas_notificacion)
+        return (
+            f"🔔 <b>¡TURNOS DISPONIBLES EN {NOMBRE_POLIDEPORTIVO.upper()}!</b> 🔔\n\n"
+            f"{resumen}\n\n"
+            f"🔗 <a href='{url_reserva}'>RESERVAR AHORA EN SIGECI</a>"
+        )
+    else:
+        hora_actual = datetime.now().strftime("%H:%M:%S")
+        return (
+            f"❌ <b>Sin turnos disponibles en {NOMBRE_POLIDEPORTIVO}</b>\n\n"
+            f"<i>Última verificación: {hora_actual} hs (Próximos {DIAS_A_CONSULTAR} días).</i>"
+        )
 
 def procesar_mensajes_telegram():
-    """Responde cuando el usuario consulta manualmente escribiendo al bot."""
-    global LAST_UPDATE_ID, TURNOS_NOTIFICADOS
+    """Escucha si el usuario escribió un mensaje en Telegram y le responde en tiempo real."""
+    global LAST_UPDATE_ID
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
     params = {"timeout": 5, "offset": LAST_UPDATE_ID}
@@ -197,67 +175,36 @@ def procesar_mensajes_telegram():
                 texto = message.get("text", "").strip().lower()
 
                 if texto:
-                    print(f"📩 Consulta manual recibida de Chat ID {chat_id}: '{texto}'")
+                    print(f"📩 Mensaje recibido de Chat ID {chat_id}: '{texto}'")
                     enviar_mensaje_telegram("🔎 Consultando la disponibilidad en el SIGECI, aguarda un momento...", chat_id=chat_id)
                     
-                    lineas_todas, _, turnos_visibles, url_reserva = obtener_estado_turnos()
-                    
-                    if lineas_todas:
-                        TURNOS_NOTIFICADOS.update(turnos_visibles)
-                        resumen = "\n".join(lineas_todas)
-                        mensaje = (
-                            f"🔔 <b>¡TURNOS DISPONIBLES EN {NOMBRE_POLIDEPORTIVO.upper()}!</b> 🔔\n\n"
-                            f"{resumen}\n\n"
-                            f"🔗 <a href='{url_reserva}'>RESERVAR AHORA EN SIGECI</a>"
-                        )
-                    else:
-                        hora_actual = datetime.now().strftime("%H:%M:%S")
-                        mensaje = (
-                            f"❌ <b>Sin turnos disponibles en {NOMBRE_POLIDEPORTIVO}</b>\n\n"
-                            f"<i>Última verificación: {hora_actual} hs (Próximos {DIAS_A_CONSULTAR} días).</i>"
-                        )
-                    
-                    enviar_mensaje_telegram(mensaje, chat_id=chat_id)
+                    respuesta = escanear_disponibilidad()
+                    enviar_mensaje_telegram(respuesta, chat_id=chat_id)
     except Exception as e:
         print(f"⚠️ Error al verificar mensajes de Telegram: {e}")
 
 def bucle_principal():
-    global TURNOS_NOTIFICADOS
     print(f"🚀 Bot iniciado en {NOMBRE_POLIDEPORTIVO}. Escuchando mensajes...")
-    enviar_mensaje_telegram(f"🤖 <b>Bot Activo en Railway:</b> Monitoreando {NOMBRE_POLIDEPORTIVO}. Envíame cualquier mensaje para consultar la disponibilidad actual.")
+    enviar_mensaje_telegram(f"🤖 <b>Bot Activo en {NOMBRE_POLIDEPORTIVO}:</b> Envíame cualquier mensaje para consultar la disponibilidad actual.")
 
     ULTIMO_ESCANEO = 0
     INTERVALO_ESCANEO = 900  # 15 minutos
 
     while True:
-        # 1. Escuchar consultas directas
+        # 1. Escuchar si le escribieron al bot
         procesar_mensajes_telegram()
 
-        # 2. Escaneo automático silencioso
+        # 2. Escaneo automático periódico
         tiempo_actual = time.time()
         if tiempo_actual - ULTIMO_ESCANEO >= INTERVALO_ESCANEO:
-            print("⏰ Ejecutando escaneo automático en segundo plano...")
-            _, lineas_nuevas, turnos_visibles, url_reserva = obtener_estado_turnos()
-            
-            if lineas_nuevas:
-                resumen_nuevos = "\n".join(lineas_nuevas)
-                mensaje_alerta = (
-                    f"🚨 <b>¡NUEVOS TURNOS DETECTADOS EN {NOMBRE_POLIDEPORTIVO.upper()}!</b> 🚨\n\n"
-                    f"{resumen_nuevos}\n\n"
-                    f"🔗 <a href='{url_reserva}'>RESERVAR AHORA EN SIGECI</a>"
-                )
-                enviar_mensaje_telegram(mensaje_alerta)
-                TURNOS_NOTIFICADOS.update(turnos_visibles)
-                print(f"✅ Notificación enviada: {len(lineas_nuevas)} grupo(s) de turnos nuevos.")
-            else:
-                print("ℹ️ Sin turnos nuevos para notificar.")
-
+            print("⏰ Ejecutando escaneo automático programado...")
+            resultado = escanear_disponibilidad()
+            # Notificar automáticamente solo si hay turnos disponibles
+            if "¡TURNOS DISPONIBLES" in resultado:
+                enviar_mensaje_telegram(resultado)
             ULTIMO_ESCANEO = tiempo_actual
 
         time.sleep(2)
 
 if __name__ == "__main__":
-    t_web = threading.Thread(target=iniciar_servidor_web, daemon=True)
-    t_web.start()
-    
     bucle_principal()
