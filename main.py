@@ -1,20 +1,25 @@
 import os
 import time
+import threading
 import requests
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timedelta
 
 # ==========================================
-# CONFIGURACIÓN Y CREDENCIALES - COLEGIALES
+# CONFIGURACIÓN Y CREDENCIALES
 # ==========================================
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8869156451:AAFQibGkEs54JVhHpgCg_j0QDuLMmGFj-p8")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8527874934:AAEkI3Mz-AD0sNpO2caooNM9sWyhw56x3iE")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "8295036704")
 
 NOMBRE_POLIDEPORTIVO = "Polideportivo Colegiales"
-SERVICIO_ID = "3149"
+SERVICIO_ID = "3125"
 
+# Canchas de Colegiales (o las de Santojanni según corresponda)
 CANCHAS = [
-    {"nombre": "Cancha 1", "sede_id": "2263"},
-    {"nombre": "Cancha 2", "sede_id": "2279"}
+    {"nombre": "Cancha 1", "sede_id": "2255"},
+    {"nombre": "Cancha 2", "sede_id": "2256"},
+    {"nombre": "Cancha 3", "sede_id": "2257"},
+    {"nombre": "Cancha 4", "sede_id": "2258"}
 ]
 
 DIAS_A_CONSULTAR = 30
@@ -27,10 +32,32 @@ DIAS_SEMANA = {
 LAST_UPDATE_ID = None
 TURNOS_NOTIFICADOS = set()  # Memoria de turnos ya informados
 
+# ==========================================
+# SERVIDOR WEB PARA RAILWAY (HEALTH CHECK)
+# ==========================================
+class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/html; charset=utf-8')
+        self.end_headers()
+        self.wfile.write(f"🤖 Bot {NOMBRE_POLIDEPORTIVO} Activo 24/7".encode('utf-8'))
+
+    def log_message(self, format, *args):
+        return
+
+def iniciar_servidor_web():
+    port = int(os.getenv("PORT", 8080))
+    server = HTTPServer(('0.0.0.0', port), SimpleHTTPRequestHandler)
+    print(f"🌐 Servidor web iniciado en puerto {port}")
+    server.serve_forever()
+
+# ==========================================
+# FUNCIONES DE TELEGRAM Y SIGECI
+# ==========================================
 def enviar_mensaje_telegram(mensaje, chat_id=None):
     target_chat_id = chat_id or TELEGRAM_CHAT_ID
     if not TELEGRAM_TOKEN or not target_chat_id:
-        print("❌ Error: Faltan credenciales de Telegram.")
+        print("❌ Error: Faltan las variables de entorno TELEGRAM_TOKEN o TELEGRAM_CHAT_ID.")
         return False
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -50,46 +77,38 @@ def enviar_mensaje_telegram(mensaje, chat_id=None):
 def crear_sesion_sigeci():
     session = requests.Session()
     session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept": "*/*",
         "X-Requested-With": "XMLHttpRequest",
         "Referer": f"https://formulario-sigeci.buenosaires.gob.ar/AgendarTramite?idPrestacion={SERVICIO_ID}&flow=primeros"
     })
-    
-    url_inicio = f"https://formulario-sigeci.buenosaires.gob.ar/AgendarTramite?idPrestacion={SERVICIO_ID}&flow=primeros"
     try:
-        session.get(url_inicio, timeout=10)
-    except Exception as e:
-        print(f"⚠️ Aviso inicializando sesión: {e}")
-        
+        session.get(f"https://formulario-sigeci.buenosaires.gob.ar/AgendarTramite?idPrestacion={SERVICIO_ID}&flow=primeros", timeout=10)
+    except Exception:
+        pass
     return session
 
 def extraer_horas_validas(lista_datos):
-    horas_validas = []
+    horas = []
     if not isinstance(lista_datos, list):
-        return horas_validas
-
+        return horas
     for item in lista_datos:
         if not isinstance(item, str):
             continue
-
         item_str = item.strip()
-
         if "T" in item_str:
             try:
-                dt_hora = datetime.strptime(item_str.split(".")[0], "%Y-%m-%dT%H:%M:%S")
-                horas_validas.append(dt_hora.strftime("%H:%M hs"))
+                dt = datetime.strptime(item_str.split(".")[0], "%Y-%m-%dT%H:%M:%S")
+                horas.append(dt.strftime("%H:%M hs"))
             except ValueError:
                 pass
         elif ":" in item_str and len(item_str) <= 8:
             try:
-                partes = item_str.split(":")
-                hora_str = f"{int(partes[0]):02d}:{int(partes[1]):02d} hs"
-                horas_validas.append(hora_str)
+                p = item_str.split(":")
+                horas.append(f"{int(p[0]):02d}:{int(p[1]):02d} hs")
             except ValueError:
                 pass
-
-    return sorted(list(set(horas_validas)))
+    return sorted(list(set(horas)))
 
 def consultar_turnos_cancha(session, sede_id, fecha_str):
     url = "https://formulario-sigeci.buenosaires.gob.ar/getHorasDisp"
@@ -111,7 +130,7 @@ def consultar_turnos_cancha(session, sede_id, fecha_str):
     return []
 
 def obtener_estado_turnos():
-    """Realiza la búsqueda y retorna los turnos visibles, nuevos y el texto formateado."""
+    """Escanea las canchas y retorna la lista completa, los turnos nuevos y los IDs visibles."""
     global TURNOS_NOTIFICADOS
     session = crear_sesion_sigeci()
     url_reserva = f"https://formulario-sigeci.buenosaires.gob.ar/AgendarTramite?idPrestacion={SERVICIO_ID}&flow=primeros"
@@ -132,7 +151,7 @@ def obtener_estado_turnos():
                 dt_fecha = datetime.strptime(fecha, "%Y-%m-%d")
                 dia_nombre = DIAS_SEMANA.get(dt_fecha.strftime("%A"), dt_fecha.strftime("%A"))
                 fecha_corta = dt_fecha.strftime("%d/%m")
-                
+
                 horas_nuevas_cancha = []
                 for h in horas:
                     clave_unica = f"{cancha['sede_id']}|{fecha}|{h}"
@@ -140,12 +159,10 @@ def obtener_estado_turnos():
                     if clave_unica not in TURNOS_NOTIFICADOS:
                         horas_nuevas_cancha.append(h)
 
-                # Agregar a la lista completa
                 lineas_todas.append(
                     f"🎾 <b>{cancha['nombre']}</b> - 📅 <b>{dia_nombre} {fecha_corta}:</b> {', '.join(horas)}"
                 )
 
-                # Agregar a la lista de nuevos si aplica
                 if horas_nuevas_cancha:
                     lineas_nuevas.append(
                         f"🎾 <b>{cancha['nombre']}</b> - 📅 <b>{dia_nombre} {fecha_corta}:</b> {', '.join(horas_nuevas_cancha)}"
@@ -153,13 +170,13 @@ def obtener_estado_turnos():
 
             time.sleep(0.05)
 
-    # Limpiar memoria de turnos que ya no existen
+    # Limpiar memoria de turnos que ya fueron reservados o vencieron
     TURNOS_NOTIFICADOS = TURNOS_NOTIFICADOS.intersection(turnos_visibles_actualmente)
 
     return lineas_todas, lineas_nuevas, turnos_visibles_actualmente, url_reserva
 
 def procesar_mensajes_telegram():
-    """Responde cuando tú haces una consulta directa."""
+    """Escucha mensajes y responde explícitamente tanto si hay como si NO hay turnos."""
     global LAST_UPDATE_ID, TURNOS_NOTIFICADOS
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
@@ -173,16 +190,15 @@ def procesar_mensajes_telegram():
                 LAST_UPDATE_ID = update["update_id"] + 1
                 message = update.get("message", {})
                 chat_id = str(message.get("chat", {}).get("id"))
-                texto = message.get("text", "").strip().lower()
+                texto = message.get("text", "").strip()
 
                 if texto:
-                    print(f"📩 Mensaje recibido de Chat ID {chat_id}: '{texto}'")
-                    enviar_mensaje_telegram("🔎 Consultando la disponibilidad en el SIGECI, aguarda un momento...", chat_id=chat_id)
+                    print(f"📩 Consulta recibida de Chat ID {chat_id}: '{texto}'")
+                    enviar_mensaje_telegram("🔎 Consultando disponibilidad en el SIGECI, aguarda un momento...", chat_id=chat_id)
                     
                     lineas_todas, _, turnos_visibles, url_reserva = obtener_estado_turnos()
                     
                     if lineas_todas:
-                        # Al consultar manualmente, se registran todos como conocidos
                         TURNOS_NOTIFICADOS.update(turnos_visibles)
                         resumen = "\n".join(lineas_todas)
                         mensaje = (
@@ -193,7 +209,7 @@ def procesar_mensajes_telegram():
                     else:
                         hora_actual = datetime.now().strftime("%H:%M:%S")
                         mensaje = (
-                            f"❌ <b>Sin turnos disponibles en {NOMBRE_POLIDEPORTIVO}</b>\n\n"
+                            f"❌ <b>Actualmente no existen turnos disponibles en {NOMBRE_POLIDEPORTIVO}.</b>\n\n"
                             f"<i>Última verificación: {hora_actual} hs (Próximos {DIAS_A_CONSULTAR} días).</i>"
                         )
                     
@@ -203,23 +219,22 @@ def procesar_mensajes_telegram():
 
 def bucle_principal():
     global TURNOS_NOTIFICADOS
-    print(f"🚀 Bot iniciado en {NOMBRE_POLIDEPORTIVO}. Escuchando mensajes...")
-    enviar_mensaje_telegram(f"🤖 <b>Bot Activo en {NOMBRE_POLIDEPORTIVO}:</b> Envíame cualquier mensaje para consultar la disponibilidad actual.")
+    print(f"🚀 Bot iniciado en {NOMBRE_POLIDEPORTIVO}. Monitoreando...")
+    enviar_mensaje_telegram(f"🤖 <b>Bot Activo:</b> Monitoreando {NOMBRE_POLIDEPORTIVO}. Envíame cualquier mensaje para consultar la disponibilidad actual.")
 
     ULTIMO_ESCANEO = 0
-    INTERVALO_ESCANEO = 900  # 15 minutos
+    INTERVALO_ESCANEO = 300  # Escaneo automático silencioso cada 5 minutos
 
     while True:
-        # 1. Escuchar consultas directas
+        # 1. Procesar mensajes directos del usuario (respuesta inmediata SIEMPRE)
         procesar_mensajes_telegram()
 
-        # 2. Escaneo automático silencioso
+        # 2. Escaneo automático en segundo plano (solo notifica novedades espontáneas)
         tiempo_actual = time.time()
         if tiempo_actual - ULTIMO_ESCANEO >= INTERVALO_ESCANEO:
             print("⏰ Ejecutando escaneo automático en segundo plano...")
             _, lineas_nuevas, turnos_visibles, url_reserva = obtener_estado_turnos()
             
-            # Solo notificar si hay turnos realmente NUEVO
             if lineas_nuevas:
                 resumen_nuevos = "\n".join(lineas_nuevas)
                 mensaje_alerta = (
@@ -229,7 +244,7 @@ def bucle_principal():
                 )
                 enviar_mensaje_telegram(mensaje_alerta)
                 TURNOS_NOTIFICADOS.update(turnos_visibles)
-                print(f"✅ Notificación enviada: {len(lineas_nuevas)} grupo(s) de turnos nuevos.")
+                print(f"✅ Notificación enviada ({len(lineas_nuevas)} línea/s nueva/s).")
             else:
                 print("ℹ️ Sin turnos nuevos para notificar.")
 
@@ -238,4 +253,7 @@ def bucle_principal():
         time.sleep(2)
 
 if __name__ == "__main__":
+    t_web = threading.Thread(target=iniciar_servidor_web, daemon=True)
+    t_web.start()
+    
     bucle_principal()
