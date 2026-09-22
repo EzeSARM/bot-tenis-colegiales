@@ -6,9 +6,8 @@ from datetime import datetime, timedelta
 # ==========================================
 # CONFIGURACIÓN Y CREDENCIALES - COLEGIALES
 # ==========================================
-# Se intenta leer desde la variable de entorno de Railway; si no existe, toma la credencial directa.
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8869156451:AAFV9GekDKdYNh4ybOD_w_XBxYG_ie5AMrM")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "8295036704")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 NOMBRE_POLIDEPORTIVO = "Polideportivo Colegiales"
 SERVICIO_ID = "3149"
@@ -26,7 +25,7 @@ DIAS_SEMANA = {
 }
 
 LAST_UPDATE_ID = None
-TURNOS_NOTIFICADOS = set()
+TURNOS_NOTIFICADOS = set()  # Memoria de turnos ya informados
 
 def enviar_mensaje_telegram(mensaje, chat_id=None):
     target_chat_id = chat_id or TELEGRAM_CHAT_ID
@@ -43,8 +42,6 @@ def enviar_mensaje_telegram(mensaje, chat_id=None):
     }
     try:
         res = requests.post(url, json=payload, timeout=10)
-        if res.status_code != 200:
-            print(f"❌ Error API Telegram: {res.status_code} - {res.text}")
         return res.status_code == 200
     except Exception as e:
         print(f"❌ Error enviando a Telegram: {e}")
