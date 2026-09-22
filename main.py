@@ -111,7 +111,7 @@ def consultar_turnos_cancha(session, sede_id, fecha_str):
     return []
 
 def obtener_estado_turnos():
-    """Realiza la búsqueda y retorna los turnos visibles, nuevos y el texto formateado."""
+    """Realiza la búsqueda y retorna los turnos divididos entre semana y fin de semana."""
     global TURNOS_NOTIFICADOS
     session = crear_sesion_sigeci()
     url_reserva = f"https://formulario-sigeci.buenosaires.gob.ar/AgendarTramite?idPrestacion={SERVICIO_ID}&flow=primeros"
@@ -122,7 +122,8 @@ def obtener_estado_turnos():
     print(f"[{datetime.now().strftime('%H:%M:%S')}] Escaneando turnos en {NOMBRE_POLIDEPORTIVO}...")
 
     lineas_todas = []
-    lineas_nuevas = []
+    lineas_nuevas_semana = []
+    lineas_nuevas_finde = []
     turnos_visibles_actualmente = set()
 
     for cancha in CANCHAS:
@@ -132,6 +133,7 @@ def obtener_estado_turnos():
                 dt_fecha = datetime.strptime(fecha, "%Y-%m-%d")
                 dia_nombre = DIAS_SEMANA.get(dt_fecha.strftime("%A"), dt_fecha.strftime("%A"))
                 fecha_corta = dt_fecha.strftime("%d/%m")
+                es_fin_de_semana = dt_fecha.weekday() in [5, 6]  # 5 = Sábado, 6 = Domingo
                 
                 horas_nuevas_cancha = []
                 for h in horas:
@@ -140,20 +142,21 @@ def obtener_estado_turnos():
                     if clave_unica not in TURNOS_NOTIFICADOS:
                         horas_nuevas_cancha.append(h)
 
-                lineas_todas.append(
-                    f"🎾 <b>{cancha['nombre']}</b> - 📅 <b>{dia_nombre} {fecha_corta}:</b> {', '.join(horas)}"
-                )
+                linea_formateada = f"🎾 <b>{cancha['nombre']}</b> - 📅 <b>{dia_nombre} {fecha_corta}:</b> {', '.join(horas)}"
+                lineas_todas.append(linea_formateada)
 
                 if horas_nuevas_cancha:
-                    lineas_nuevas.append(
-                        f"🎾 <b>{cancha['nombre']}</b> - 📅 <b>{dia_nombre} {fecha_corta}:</b> {', '.join(horas_nuevas_cancha)}"
-                    )
+                    linea_nueva_formateada = f"🎾 <b>{cancha['nombre']}</b> - 📅 <b>{dia_nombre} {fecha_corta}:</b> {', '.join(horas_nuevas_cancha)}"
+                    if es_fin_de_semana:
+                        lineas_nuevas_finde.append(linea_nueva_formateada)
+                    else:
+                        lineas_nuevas_semana.append(linea_nueva_formateada)
 
             time.sleep(0.05)
 
     TURNOS_NOTIFICADOS = TURNOS_NOTIFICADOS.intersection(turnos_visibles_actualmente)
 
-    return lineas_todas, lineas_nuevas, turnos_visibles_actualmente, url_reserva
+    return lineas_todas, lineas_nuevas_finde, lineas_nuevas_semana, turnos_visibles_actualmente, url_reserva
 
 def procesar_mensajes_telegram():
     """Responde cuando tú haces una consulta directa."""
@@ -179,7 +182,7 @@ def procesar_mensajes_telegram():
                     print(f"📩 Mensaje recibido de Chat ID {chat_id}: '{texto}'")
                     enviar_mensaje_telegram("🔎 Consultando la disponibilidad en el SIGECI, aguarda un momento...", chat_id=chat_id)
                     
-                    lineas_todas, _, turnos_visibles, url_reserva = obtener_estado_turnos()
+                    lineas_todas, _, _, turnos_visibles, url_reserva = obtener_estado_turnos()
                     
                     if lineas_todas:
                         TURNOS_NOTIFICADOS.update(turnos_visibles)
@@ -216,18 +219,37 @@ def bucle_principal():
         tiempo_actual = time.time()
         if tiempo_actual - ULTIMO_ESCANEO >= INTERVALO_ESCANEO:
             print("⏰ Ejecutando escaneo automático en segundo plano...")
-            _, lineas_nuevas, turnos_visibles, url_reserva = obtener_estado_turnos()
+            _, lineas_nuevas_finde, lineas_nuevas_semana, turnos_visibles, url_reserva = obtener_estado_turnos()
             
-            if lineas_nuevas:
-                resumen_nuevos = "\n".join(lineas_nuevas)
+            # Prioridad 1: Notificación especial si hay turnos de FIN DE SEMANA
+            if lineas_nuevas_finde:
+                resumen_finde = "\n".join(lineas_nuevas_finde)
+                bloque_semana = ""
+                if lineas_nuevas_semana:
+                    bloque_semana = "\n\n<b>Otros turnos en la semana:</b>\n" + "\n".join(lineas_nuevas_semana)
+
                 mensaje_alerta = (
-                    f"🚨 <b>¡NUEVOS TURNOS DETECTADOS EN {NOMBRE_POLIDEPORTIVO.upper()}!</b> 🚨\n\n"
-                    f"{resumen_nuevos}\n\n"
+                    f"⭐ <b>¡ALERTA FIN DE SEMANA EN {NOMBRE_POLIDEPORTIVO.upper()}!</b> ⭐\n"
+                    f"🔥 <i>¡SE DETECTARON TURNOS PARA SÁBADO/DOMINGO!</i> 🔥\n\n"
+                    f"{resumen_finde}"
+                    f"{bloque_semana}\n\n"
                     f"🔗 <a href='{url_reserva}'>RESERVAR AHORA EN SIGECI</a>"
                 )
                 enviar_mensaje_telegram(mensaje_alerta)
                 TURNOS_NOTIFICADOS.update(turnos_visibles)
-                print(f"✅ Notificación enviada: {len(lineas_nuevas)} grupo(s) de turnos nuevos.")
+                print(f"✅ Notificación enviada: {len(lineas_nuevas_finde)} turno(s) de fin de semana.")
+
+            # Prioridad 2: Notificación estándar si solo hay turnos de DÍAS DE SEMANA
+            elif lineas_nuevas_semana:
+                resumen_semana = "\n".join(lineas_nuevas_semana)
+                mensaje_alerta = (
+                    f"🚨 <b>¡NUEVOS TURNOS DETECTADOS EN {NOMBRE_POLIDEPORTIVO.upper()}!</b> 🚨\n\n"
+                    f"{resumen_semana}\n\n"
+                    f"🔗 <a href='{url_reserva}'>RESERVAR AHORA EN SIGECI</a>"
+                )
+                enviar_mensaje_telegram(mensaje_alerta)
+                TURNOS_NOTIFICADOS.update(turnos_visibles)
+                print(f"✅ Notificación enviada: {len(lineas_nuevas_semana)} grupo(s) de turnos nuevos.")
             else:
                 print("ℹ️ Sin turnos nuevos para notificar.")
 
