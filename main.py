@@ -6,9 +6,9 @@ from datetime import datetime, timedelta
 # ==========================================
 # CONFIGURACIÓN Y CREDENCIALES - COLEGIALES
 # ==========================================
-# ✅ SEGURO: Sin valores por defecto expuestos
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+# Se intenta leer desde la variable de entorno de Railway; si no existe, toma la credencial directa.
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8869156451:AAFV9GekDKdYNh4ybOD_w_XBxYG_ie5AMrM")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "8295036704")
 
 NOMBRE_POLIDEPORTIVO = "Polideportivo Colegiales"
 SERVICIO_ID = "3149"
@@ -26,7 +26,7 @@ DIAS_SEMANA = {
 }
 
 LAST_UPDATE_ID = None
-TURNOS_NOTIFICADOS = set()  # Memoria de turnos ya informados
+TURNOS_NOTIFICADOS = set()
 
 def enviar_mensaje_telegram(mensaje, chat_id=None):
     target_chat_id = chat_id or TELEGRAM_CHAT_ID
@@ -43,6 +43,8 @@ def enviar_mensaje_telegram(mensaje, chat_id=None):
     }
     try:
         res = requests.post(url, json=payload, timeout=10)
+        if res.status_code != 200:
+            print(f"❌ Error API Telegram: {res.status_code} - {res.text}")
         return res.status_code == 200
     except Exception as e:
         print(f"❌ Error enviando a Telegram: {e}")
@@ -141,12 +143,10 @@ def obtener_estado_turnos():
                     if clave_unica not in TURNOS_NOTIFICADOS:
                         horas_nuevas_cancha.append(h)
 
-                # Agregar a la lista completa
                 lineas_todas.append(
                     f"🎾 <b>{cancha['nombre']}</b> - 📅 <b>{dia_nombre} {fecha_corta}:</b> {', '.join(horas)}"
                 )
 
-                # Agregar a la lista de nuevos si aplica
                 if horas_nuevas_cancha:
                     lineas_nuevas.append(
                         f"🎾 <b>{cancha['nombre']}</b> - 📅 <b>{dia_nombre} {fecha_corta}:</b> {', '.join(horas_nuevas_cancha)}"
@@ -154,7 +154,6 @@ def obtener_estado_turnos():
 
             time.sleep(0.05)
 
-    # Limpiar memoria de turnos que ya no existen
     TURNOS_NOTIFICADOS = TURNOS_NOTIFICADOS.intersection(turnos_visibles_actualmente)
 
     return lineas_todas, lineas_nuevas, turnos_visibles_actualmente, url_reserva
@@ -162,6 +161,9 @@ def obtener_estado_turnos():
 def procesar_mensajes_telegram():
     """Responde cuando tú haces una consulta directa."""
     global LAST_UPDATE_ID, TURNOS_NOTIFICADOS
+
+    if not TELEGRAM_TOKEN:
+        return
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
     params = {"timeout": 5, "offset": LAST_UPDATE_ID}
@@ -183,7 +185,6 @@ def procesar_mensajes_telegram():
                     lineas_todas, _, turnos_visibles, url_reserva = obtener_estado_turnos()
                     
                     if lineas_todas:
-                        # Al consultar manualmente, se registran todos como conocidos
                         TURNOS_NOTIFICADOS.update(turnos_visibles)
                         resumen = "\n".join(lineas_todas)
                         mensaje = (
@@ -220,7 +221,6 @@ def bucle_principal():
             print("⏰ Ejecutando escaneo automático en segundo plano...")
             _, lineas_nuevas, turnos_visibles, url_reserva = obtener_estado_turnos()
             
-            # Solo notificar si hay turnos realmente NUEVO
             if lineas_nuevas:
                 resumen_nuevos = "\n".join(lineas_nuevas)
                 mensaje_alerta = (
